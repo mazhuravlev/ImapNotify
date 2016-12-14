@@ -7,7 +7,11 @@ using Microsoft.Win32;
 using System.Reflection;
 
 namespace ImapNotify {
-	class Util {
+	class Util
+	{
+
+	    private const string RegistryPath = @"Software\Oblpro\Notify";
+
 		/// <summary>
 		/// Configures whether program is run on startup by modifying the
 		/// Run settings in the registry under HKEY_CURRENT_USER.
@@ -25,13 +29,51 @@ namespace ImapNotify {
 			else
 				Key.DeleteValue(Title.Title, false);
 		}
-  
-    /// <summary>
-    /// Checks whether an internet connection is available.
-    /// </summary>
-    /// <returns>True if an internet connection is available, otherwise
-    /// true is returned</returns>
-    public static bool IsInternetConnected(bool fast = true) {
+
+        public static void SavePassword(string password)
+        {
+            RegistryKey Key = Registry.CurrentUser.OpenSubKey(RegistryPath, true);
+            Key.SetValue("password", password);
+        }
+
+	    public static void CheckInitRegistry()
+	    {
+            RegistryKey Key = Registry.CurrentUser.CreateSubKey(RegistryPath);
+	        try
+	        {
+	            Key.GetValue("version");
+	        }
+	        catch (NullReferenceException)
+	        {
+                Key.SetValue("version", "0.1");
+            }
+	    }
+
+        public static string GetPassword()
+        {
+            RegistryKey Key = Registry.CurrentUser.OpenSubKey(RegistryPath, true);
+            return (string)Key.GetValue("password");
+        }
+
+	    public static void DeletePassword()
+	    {
+	        RegistryKey Key = Registry.CurrentUser.OpenSubKey(RegistryPath, true);
+	        try
+	        {
+	            Key.DeleteValue("password");
+	        }
+	        catch(ArgumentException)
+	        {
+	            //
+	        }
+	}
+
+        /// <summary>
+        /// Checks whether an internet connection is available.
+        /// </summary>
+        /// <returns>True if an internet connection is available, otherwise
+        /// true is returned</returns>
+        public static bool IsInternetConnected(bool fast = true) {
       try {
         /* dns.msftncsi.com is guaranteed to resolve to
          * 131.107.255.255

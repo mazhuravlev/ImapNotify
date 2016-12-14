@@ -1,4 +1,6 @@
 ﻿using System;
+using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using S22.Imap;
@@ -12,16 +14,21 @@ namespace ImapNotify {
 		private static bool IsRunning = false;
 		public static event NewMessageEventHandler NewMessageEvent;
 
-		public static void Start() {
-			bool Gmail = Properties.Settings.Default.UseGmail;
-			string Host = Gmail ? Properties.Settings.Default.GmailImapServer :
-				Properties.Settings.Default.ImapServer;
-			int Port = Gmail ? Int32.Parse(Properties.Settings.Default.GmailServerPort) :
-				Int32.Parse(Properties.Settings.Default.ServerPort);
-			string Username = Properties.Settings.Default.Username;
-			string Password = Encryption.DecryptString(Properties.Settings.Default.Password);
-			bool SSL = Gmail ? true : Properties.Settings.Default.UseSSL;
+	    private static string Username;
+	    private static string Password;
 
+        private const string Host = "imap.yandex.com";
+		private const int Port = 993;
+		private const bool SSL = true;
+
+	    public static void SetCredentials(string login, string password)
+	    {
+            Username = login;
+            Password = password;
+        }
+
+		public static void Start()
+		{
 			IC = new ImapClient(Host, Port, Username, Password, AuthMethod.Login, SSL);
 			IsRunning = true;
 
@@ -30,9 +37,16 @@ namespace ImapNotify {
 				MailMessage m = null;
 				int messageCount;
 				lock (IC) {
-					m = IC.GetMessage(e.MessageUID, FetchOptions.TextOnly, false);
-					messageCount = IC.Search(SearchCondition.Unseen()).Length;
-				};
+				    try
+				    {
+				        m = IC.GetMessage(e.MessageUID, FetchOptions.TextOnly, false);
+				        messageCount = IC.Search(SearchCondition.Unseen()).Count();
+                    }
+                    catch (IOException)
+                    {
+                        return;
+                    }
+                };
 				NewMessageEventArgs args = new NewMessageEventArgs(m, messageCount);
 				NewMessageEvent(sender, args);
 			};
@@ -40,8 +54,11 @@ namespace ImapNotify {
 
 		public static void Stop() {
 			if (IsRunning)
-				IC.Dispose();
-			IsRunning = false;
+			    lock (IC)
+			    {
+			        IC.Dispose();
+			    }
+		    IsRunning = false;
 		}
 
 		public static bool Started() {
@@ -51,12 +68,31 @@ namespace ImapNotify {
 		public static int GetUnreadCount() {
 			if (!IsRunning)
 				return 0;
-			int Count = 0;
-			lock (IC) {
-				Count = IC.Search(SearchCondition.Unseen()).Length;
-			}
-			return Count;
+		        lock (IC)
+		        {
+		            try
+		            {
+		                return IC.Search(SearchCondition.Unseen()).Count();
+		            }
+		            catch (IOException)
+		            {
+		                return 0;
+		            }
+		        }
 		}
+
+	    public static bool VerifyCredentials(string login, string password)
+	    {
+	        try
+	        {
+	            var client = new ImapClient(Host, Port, login, password, AuthMethod.Login, SSL);
+	        }
+	        catch (InvalidCredentialsException)
+	        {
+	            return false;
+	        }
+            return true;
+        }
 	}
 
 	public class NewMessageEventArgs : EventArgs {

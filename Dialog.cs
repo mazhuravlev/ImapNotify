@@ -6,6 +6,8 @@ using System.Media;
 using System.Reflection;
 using System.Windows.Forms;
 using System.Net.NetworkInformation;
+using System.Text.RegularExpressions;
+using System.Threading;
 using Microsoft.Win32;
 
 namespace ImapNotify {
@@ -14,8 +16,17 @@ namespace ImapNotify {
 		private Icon IconOld;
 		private string soundPath;
 
-		public Dialog() {
-			InitializeComponent();
+        private const int NotifyTimeout = 60 * 60 * 1000;
+
+		public Dialog()
+		{
+		    while (!Util.IsInternetConnected())
+		    {
+                Thread.Sleep(TimeSpan.FromMinutes(5));
+            }
+            Util.CheckInitRegistry();
+
+            InitializeComponent();
 			IconOld = notifyIcon.Icon;
 			soundPath = Path.GetDirectoryName(
 				Assembly.GetExecutingAssembly().Location) + @"\Notify.wav";
@@ -29,118 +40,78 @@ namespace ImapNotify {
 			NetworkChange.NetworkAvailabilityChanged += new NetworkAvailabilityChangedEventHandler(OnNetworkAvailabilityChanged);
 			SystemEvents.PowerModeChanged += new PowerModeChangedEventHandler(OnPowerModeChanged);
 			Imap.NewMessageEvent += new NewMessageEventHandler(OnNewMessage);
-			try {
-				if (Properties.Settings.Default.Username == "" ||
-					Properties.Settings.Default.Password == "") {
-					notifyIcon.ShowBalloonTip(300, "First Run?", "Right-cick to configure settings",
-						ToolTipIcon.Info);
-				} else {
-					Imap.Start();
-					CheckNewMail();
-				}
-			} catch (Exception ex) {
-				notifyIcon.ShowBalloonTip(300, "Error connecting to host", ex.Message,
-					ToolTipIcon.Error);
-			}
+
+		    var login = Environment.UserName + "@oblpro.ru";
+            if (!(new Regex(@"\w+_\w{2}@oblpro\.ru").IsMatch(login)))
+		    {
+                DisplayOkno();
+                Environment.Exit(0);
+            }
+
+		    var password = Util.GetPassword() ?? PromptPassword(login);
+            Util.DeletePassword();
+            while (!Imap.VerifyCredentials(login, password))
+		    {
+		        password = PromptPassword(login);
+		    }
+            Util.SavePassword(password);
+            Imap.SetCredentials(login, password);
+            Imap.Start();
+            CheckNewMail();
+		    timer.Enabled = true;
 		}
 
-		private void Dialog_Resize(object sender, EventArgs e) {
+	    private static string PromptPassword(string email)
+	    {
+	        var textInput = new TextInput();
+            textInput.SetEmail(email);
+	        textInput.ShowDialog();
+            var password = textInput.Value;
+	        textInput.Dispose();
+	        return password;
+	    }
+
+	    private static void DisplayOkno()
+	    {
+            var d = new LoginWarning();
+	        d.ShowDialog();
+            d.Dispose();
+	    }
+
+	    private void Dialog_Resize(object sender, EventArgs e) {
 			if (FormWindowState.Minimized == WindowState)
 				Hide();
 		}
 
-		private void EnableFields(bool enable) {
-			labelImapServer.Enabled = enable;
-			labelServerPort.Enabled = enable;
-			labelURL.Enabled = enable;
-			textImapServer.Enabled = enable;
-			textServerPort.Enabled = enable;
-			textURL.Enabled = enable;
-			useSSL.Enabled = enable;
-		}
-
-		private void useGmail_CheckedChanged(object sender, EventArgs e) {
-			EnableFields(!useGmail.Checked);
-			buttonApply.Enabled = true;
-		}
-
-		private void Dialog_FormClosing(object sender, FormClosingEventArgs e) {
+	    private void Dialog_FormClosing(object sender, FormClosingEventArgs e) {
 			if (!reallyClose) {
 				e.Cancel = true;
 				WindowState = FormWindowState.Minimized;
 			}
 
 		}
-
-		private void contextMenuQuit_Click(object sender, EventArgs e) {
-			reallyClose = true;
-			Close();
-			Imap.Stop();
-			Application.Exit();
-		}
-
-		private void contextMenuConfigure_Click(object sender, EventArgs e) {
-			Show();
-			WindowState = FormWindowState.Normal;
-			Focus();
-		}
-
-		private void contextMenuReconnect_Click(object sender, EventArgs e) {
-			Reconnect();
-		}
-
-		private void buttonApply_Click(object sender, EventArgs e) {
-			Properties.Settings.Default.Password = Encryption.EncryptString(textPassword.Text);
-			Properties.Settings.Default.Save();
-			Util.RunOnStartup(Properties.Settings.Default.AutoRun);
-
-			buttonApply.Enabled = false;
-			Reconnect();
-		}
+      
 
 		private void Dialog_Load(object sender, EventArgs e) {
-			textPassword.Text = Encryption.DecryptString(Properties.Settings.Default.Password);
-			EnableFields(!Properties.Settings.Default.UseGmail);
+			//textPassword.Text = Encryption.DecryptString(Properties.Settings.Default.Password);
 		}
 
 		private void OnNewMessage(object sender, NewMessageEventArgs e) {
-			notifyIcon.ShowBalloonTip(300, "You've got new e-mail",
+            notifyIcon.Visible = true;
+            notifyIcon.ShowBalloonTip(NotifyTimeout, "Вам пришло новое сообщение",
 				e.Message.Subject, ToolTipIcon.Info);
-			if (Properties.Settings.Default.PlaySound) {
-				try {
-					(new SoundPlayer(soundPath)).Play();
-				} catch (Exception) { }
-			}
 			UpdateTrayIcon(e.UnreadMails);
 		}
 
-		private void notifyIcon_BalloonTipClicked(object sender, EventArgs e) {
-			string site = Properties.Settings.Default.UseGmail ?
-				Properties.Settings.Default.GmailWebsite :
-				Properties.Settings.Default.URL;
-			if ((Control.MouseButtons & MouseButtons.Right) == MouseButtons.Right)
-				return;
-			if (site != "")
-				Process.Start(site);
-			notifyIcon.Icon = IconOld;
-		}
+		private void notifyIcon_BalloonTipClicked(object sender, EventArgs e)
+		{
+            notifyIcon.Icon = IconOld;
+        }
 
 		private void notifyIcon_MouseClick(object sender, MouseEventArgs e) {
-			if (e.Button == MouseButtons.Left) {
-				string site = Properties.Settings.Default.UseGmail ?
-					Properties.Settings.Default.GmailWebsite :
-					Properties.Settings.Default.URL;
-				if (site != "")
-					Process.Start(site);
-				notifyIcon.Icon = IconOld;
-			}
-		}
-
-		private void text_TextChanged(object sender, EventArgs e) {
-			if (((TextBox)sender).ContainsFocus)
-				buttonApply.Enabled = true;
-		}
-
+            notifyIcon.Icon = IconOld;
+        }
+        
 		private void Dialog_FormClosed(object sender, FormClosedEventArgs e) {
 			if (reallyClose)
 				Application.Exit();
@@ -162,10 +133,10 @@ namespace ImapNotify {
 
 		private void UpdateTrayIcon(int Count) {
 			if (Count > 0) {
-				notifyIcon.Text = Count.ToString() + " unread message" + (Count > 1 ? "s" : "");
+				notifyIcon.Text = "Непрочитанных сообщений: " + Count.ToString();
 				notifyIcon.Icon = Properties.Resources.IconUnread;
 			} else {
-				notifyIcon.Text = "No new messages";
+				notifyIcon.Text = "Нет новых сообщений";
 				notifyIcon.Icon = IconOld;
 			}
 		}
@@ -173,25 +144,17 @@ namespace ImapNotify {
 		private void CheckNewMail() {
 			int Count = Imap.GetUnreadCount();
 			if (Count > 0) {
-				notifyIcon.ShowBalloonTip(300, "You've got new e-mail", Count.ToString() +
-					" unread message" + (Count > 1 ? "s" : ""), ToolTipIcon.Info);
-				if (Properties.Settings.Default.PlaySound) {
+				notifyIcon.ShowBalloonTip(NotifyTimeout, "Новая почта",
+                    "Непрочитанных сообщений: " + Count.ToString(), ToolTipIcon.Info);
+				/*if (Properties.Settings.Default.PlaySound) {
 					try {
 						(new SoundPlayer(soundPath)).Play();
 					} catch (Exception) { }
-				}
+				}*/
 			}
 			UpdateTrayIcon(Count);
 		}
 
-		private void checkBoxChanged(object sender, EventArgs e) {
-			if (((CheckBox)sender).ContainsFocus)
-				buttonApply.Enabled = true;
-		}
-
-		private void textURL_Enter(object sender, EventArgs e) {
-			tipURL.Show("URL to go to when clicking on\ntrayicon or balloontip. If none,\njust leave empty.", textURL);
-		}
 
 		private void Reconnect(bool checkForNewMails = true) {
 			try {
@@ -200,7 +163,7 @@ namespace ImapNotify {
 				if (checkForNewMails)
 					CheckNewMail();
 			} catch (Exception ex) {
-				notifyIcon.ShowBalloonTip(500, "Error connecting to host", ex.Message,
+				notifyIcon.ShowBalloonTip(500, "Ошибка соединения", ex.Message,
 					ToolTipIcon.Error);
 			}
 		}
